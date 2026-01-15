@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  sora2api:
+    image: thesmallhancat/sora2api:latest
+    container_name: sora2api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./config/setting.toml:/app/config/setting.toml
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
