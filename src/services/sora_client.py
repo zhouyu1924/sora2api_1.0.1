@@ -132,7 +132,7 @@ class SoraClient:
         return "gAAAAAC" + solution
 
     @staticmethod
-    def _build_sentinel_token(
+    async def _build_sentinel_token(
         flow: str,
         req_id: str,
         pow_token: str,
@@ -147,27 +147,19 @@ class SoraClient:
         if proofofwork.get("required"):
             seed = proofofwork.get("seed", "")
             difficulty = proofofwork.get("difficulty", "")
-            if seed and difficulty:
-                try:
-                    # NOTE: solving dependent PoW is still synchronous here because _build_sentinel_token is static/sync.
-                    # Ideally, this should also be async, but it might require changing call signatures further up.
-                    # However, the vast majority of time is spent in the initial PoW.
-                    # Let's see if we can make this async too? 
-                    # The caller _generate_sentinel_token is async, so we can await _build_sentinel_token if we make it async.
-                    # But _build_sentinel_token is currently static.
-                    # Let's leave it sync for now unless user asks, or better yet, just run the solver in executor here too?
-                    # But we can't await easily in a sync method.
-                    # Let's execute it directly for now as per plan, focusing on _get_pow_token which is the main one.
-                    # WAIT, the plan said "Refactor _get_pow_token to be async".
-                    pass
-                except:
-                    pass
-            
+        if seed and difficulty:
+            try:
+                # Run CPU-bound PoW in executor
                 config_list = SoraClient._get_pow_config(user_agent)
-                solution, success = SoraClient._solve_pow(seed, difficulty, config_list)
+                loop = asyncio.get_running_loop()
+                solution, success = await loop.run_in_executor(
+                    None, SoraClient._solve_pow, seed, difficulty, config_list
+                )
                 final_pow_token = "gAAAAAB" + solution
                 if not success:
                     debug_logger.log_warning("PoW calculation failed, using error token")
+            except Exception as e:
+                debug_logger.log_error(f"PoW calculation error: {str(e)}")
 
         token_payload = {
             "p": final_pow_token,
@@ -222,7 +214,7 @@ class SoraClient:
             resp = response.json()
 
         # Build final sentinel token
-        sentinel_token = self._build_sentinel_token(
+        sentinel_token = await self._build_sentinel_token(
             self.SENTINEL_FLOW, req_id, pow_token, resp, user_agent
         )
         return sentinel_token

@@ -5,7 +5,7 @@ import base64
 import time
 import random
 import re
-from typing import Optional, AsyncGenerator, Dict, Any
+from typing import Optional, AsyncGenerator, Dict, Any, Tuple
 from datetime import datetime
 from .sora_client import SoraClient
 from .token_manager import TokenManager
@@ -255,7 +255,7 @@ class GenerationHandler:
 
         return cleaned
 
-    def _extract_style(self, prompt: str) -> tuple[str, Optional[str]]:
+    def _extract_style(self, prompt: str) -> Tuple[str, Optional[str]]:
         """Extract style from prompt
 
         Args:

@@ -5,6 +5,7 @@ from typing import List, Optional
 from datetime import datetime
 from pathlib import Path
 import secrets
+import asyncio
 from pydantic import BaseModel
 from ..core.auth import AuthManager
 from ..core.config import config
@@ -621,10 +622,15 @@ async def batch_operate(request: BatchOperationRequest, token: str = Depends(ver
 
         async def process_op(token_id: int):
             nonlocal success_count, failed_count
-            res = {"id": token_id, "status": "pending"}
+            res = {"id": token_id, "status": "pending", "email": None}
             try:
-                if action == "test":
-                    async with sem:
+                # Fetch token to get email
+                token_data = await db.get_token(token_id)
+                if token_data:
+                    res["email"] = token_data.email
+                
+                async with sem:
+                    if action == "test":
                         test_res = await token_manager.test_token(token_id)
                         if test_res.get("valid"):
                             res["status"] = "success"
@@ -633,22 +639,29 @@ async def batch_operate(request: BatchOperationRequest, token: str = Depends(ver
                             res["status"] = "failed"
                             res["message"] = test_res.get("message")
                             failed_count += 1
-                elif action == "enable":
-                    await token_manager.enable_token(token_id)
-                    res["status"] = "success"
-                    success_count += 1
-                elif action == "disable":
-                    await token_manager.disable_token(token_id)
-                    res["status"] = "success"
-                    success_count += 1
-                elif action == "delete":
-                    await token_manager.delete_token(token_id)
-                    res["status"] = "success"
-                    success_count += 1
-                else:
-                    res["status"] = "error"
-                    res["message"] = f"Unknown action: {action}"
-                    failed_count += 1
+                            # Auto-disable failed tokens
+                            try:
+                                await token_manager.disable_token(token_id)
+                                res["auto_disabled"] = True
+                            except Exception as disable_err:
+                                res["auto_disabled"] = False
+                                res["disable_error"] = str(disable_err)
+                    elif action == "enable":
+                        await token_manager.enable_token(token_id)
+                        res["status"] = "success"
+                        success_count += 1
+                    elif action == "disable":
+                        await token_manager.disable_token(token_id)
+                        res["status"] = "success"
+                        success_count += 1
+                    elif action == "delete":
+                        await token_manager.delete_token(token_id)
+                        res["status"] = "success"
+                        success_count += 1
+                    else:
+                        res["status"] = "error"
+                        res["message"] = f"Unknown action: {action}"
+                        failed_count += 1
             except Exception as e:
                 res["status"] = "error"
                 res["message"] = str(e)

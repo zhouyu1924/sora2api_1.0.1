@@ -138,36 +138,6 @@
                             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
                         </svg>
                     </button>
-                    <button onclick="batchTestUpdate()"
-                        class="inline-flex items-center justify-center rounded-md bg-purple-600 text-white hover:bg-purple-700 h-8 px-3"
-                        title="一键测试更新所有Token">
-                        <svg class="h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-                            stroke="currentColor" stroke-width="2">
-                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-                            <polyline points="22 4 12 14.01 9 11.01" />
-                        </svg>
-                        <span class="text-sm font-medium">测试更新</span>
-                    </button>
-                    <button onclick="batchEnableAll()"
-                        class="inline-flex items-center justify-center rounded-md bg-teal-600 text-white hover:bg-teal-700 h-8 px-3"
-                        title="一键启用所有禁用的Token">
-                        <svg class="h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-                            stroke="currentColor" stroke-width="2">
-                            <path d="M9 11l3 3L22 4" />
-                            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-                        </svg>
-                        <span class="text-sm font-medium">批量启用</span>
-                    </button>
-                    <button onclick="batchDeleteDisabled()"
-                        class="inline-flex items-center justify-center rounded-md bg-red-600 text-white hover:bg-red-700 h-8 px-3"
-                        title="一键清理所有禁用的Token">
-                        <svg class="h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-                            stroke="currentColor" stroke-width="2">
-                            <polyline points="3 6 5 6 21 6" />
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        </svg>
-                        <span class="text-sm font-medium">清理禁用</span>
-                    </button>
                     <button onclick="exportTokens()"
                         class="inline-flex items-center justify-center rounded-md bg-blue-600 text-white hover:bg-blue-700 h-8 px-3"
                         title="导出所有Token">
@@ -200,28 +170,21 @@
                         <span class="text-sm font-medium">新增</span>
                     </button>
                 </div>
-                <!-- Batch Actions Toolbar (Hidden by default) -->
-                <div id="batchToolbar" class="hidden flex items-center gap-3 border-l pl-4 ml-4 border-gray-300">
-                    <span class="text-sm font-medium" id="selectedCount">已选 0 项</span>
-                    <div class="flex items-center gap-2">
-                        <button onclick="batchOperate('test')"
-                            class="inline-flex items-center justify-center rounded-md bg-purple-600 text-white hover:bg-purple-700 h-8 px-3 text-sm">
-                            批量测试
-                        </button>
-                        <button onclick="batchOperate('enable')"
-                            class="inline-flex items-center justify-center rounded-md bg-teal-600 text-white hover:bg-teal-700 h-8 px-3 text-sm">
-                            批量启用
-                        </button>
-                        <button onclick="batchOperate('disable')"
-                            class="inline-flex items-center justify-center rounded-md bg-orange-600 text-white hover:bg-orange-700 h-8 px-3 text-sm">
-                            批量禁用
-                        </button>
-                        <button onclick="batchOperate('delete')"
-                            class="inline-flex items-center justify-center rounded-md bg-red-600 text-white hover:bg-red-700 h-8 px-3 text-sm">
-                            批量删除
-                        </button>
-                    </div>
-                </div>
+            </div>
+
+
+            <!-- 批量操作工具栏 -->
+            <div id="batchToolbar"
+                class="hidden flex items-center gap-2 animate-in fade-in slide-in-from-top-1 bg-muted/50 p-2 rounded-lg border border-border mb-2">
+                <span id="selectedCount" class="text-sm font-medium mr-2"></span>
+                <button onclick="doBatchTest()"
+                    class="inline-flex items-center justify-center rounded-md bg-white border border-gray-300 shadow-sm hover:bg-gray-50 h-7 px-2 text-xs">批量测试</button>
+                <button onclick="doBatchEnable()"
+                    class="inline-flex items-center justify-center rounded-md bg-white border border-gray-300 shadow-sm hover:bg-green-50 hover:text-green-700 h-7 px-2 text-xs">批量启用</button>
+                <button onclick="doBatchDisable()"
+                    class="inline-flex items-center justify-center rounded-md bg-white border border-gray-300 shadow-sm hover:bg-yellow-50 hover:text-yellow-700 h-7 px-2 text-xs">批量禁用</button>
+                <button onclick="doBatchDelete()"
+                    class="inline-flex items-center justify-center rounded-md bg-white border border-destructive shadow-sm hover:bg-destructive hover:text-white h-7 px-2 text-xs text-destructive">批量删除</button>
             </div>
 
             <div class="relative w-full overflow-auto">
@@ -1126,39 +1089,111 @@
     </div>
 
     <script>
-        let allTokens = [];
-        let selectedTokens = new Set();
+        window.allTokens = [];
+        window.selectedTokens = new Set();
 
-        const $ = (id) => document.getElementById(id),
-            checkAuth = () => { const t = localStorage.getItem('adminToken'); return t || (location.href = '/login', null), t },
-            apiRequest = async (url, opts = {}) => { const t = checkAuth(); if (!t) return null; const r = await fetch(url, { ...opts, headers: { ...opts.headers, Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' } }); return r.status === 401 ? (localStorage.removeItem('adminToken'), location.href = '/login', null) : r },
-            loadStats = async () => { try { const r = await apiRequest('/api/stats'); if (!r) return; const d = await r.json(); $('statTotal').textContent = d.total_tokens || 0; $('statActive').textContent = d.active_tokens || 0; $('statImages').textContent = (d.today_images || 0) + '/' + (d.total_images || 0); $('statVideos').textContent = (d.today_videos || 0) + '/' + (d.total_videos || 0); $('statErrors').textContent = (d.today_errors || 0) + '/' + (d.total_errors || 0) } catch (e) { console.error('加载统计失败:', e) } },
-            loadTokens = async () => { try { const r = await apiRequest('/api/tokens'); if (!r) return; allTokens = await r.json(); renderTokens() } catch (e) { console.error('加载Token失败:', e) } },
-            formatExpiry = exp => { if (!exp) return '-'; const d = new Date(exp), now = new Date(), diff = d - now; const dateStr = d.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-'); const timeStr = d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }); if (diff < 0) return `<span class="text-red-600">${dateStr} ${timeStr}</span>`; const days = Math.floor(diff / 864e5); if (days < 7) return `<span class="text-orange-600">${dateStr} ${timeStr}</span>`; return `${dateStr} ${timeStr}` },
-            formatPlanType = type => { if (!type) return '-'; const typeMap = { 'chatgpt_team': 'Team', 'chatgpt_plus': 'Plus', 'chatgpt_pro': 'Pro', 'chatgpt_free': 'Free' }; return typeMap[type] || type },
-            formatSora2 = (t) => { if (t.sora2_supported === true) { const remaining = t.sora2_total_count - t.sora2_redeemed_count; const tooltipText = `邀请码: ${t.sora2_invite_code || '无'}\n可用次数: ${remaining}/${t.sora2_total_count}\n已用次数: ${t.sora2_redeemed_count}`; return `<div class="inline-flex items-center gap-1"><span class="inline-flex items-center rounded px-2 py-0.5 text-xs bg-green-50 text-green-700 cursor-pointer" title="${tooltipText}" onclick="copySora2Code('${t.sora2_invite_code || ''}')">支持</span><span class="text-xs text-muted-foreground" title="${tooltipText}">${remaining}/${t.sora2_total_count}</span></div>` } else if (t.sora2_supported === false) { return `<span class="inline-flex items-center rounded px-2 py-0.5 text-xs bg-gray-100 text-gray-700 cursor-pointer" title="点击使用邀请码激活" onclick="openSora2Modal(${t.id})">不支持</span>` } else { return '-' } },
-            formatPlanTypeWithTooltip = (t) => { const tooltipText = t.subscription_end ? `套餐到期: ${new Date(t.subscription_end).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-')} ${new Date(t.subscription_end).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}` : ''; return `<span class="inline-flex items-center rounded px-2 py-0.5 text-xs bg-blue-50 text-blue-700 cursor-pointer" title="${tooltipText || t.plan_title || '-'}">${formatPlanType(t.plan_type)}</span>` },
-            formatSora2Remaining = (t) => { if (t.sora2_supported === true) { const remaining = t.sora2_remaining_count || 0; return `<span class="text-xs">${remaining}</span>` } else { return '-' } },
-            formatClientId = (clientId) => { if (!clientId) return '-'; const short = clientId.substring(0, 8) + '...'; return `<span class="text-xs font-mono cursor-pointer hover:text-primary" title="${clientId}" onclick="navigator.clipboard.writeText('${clientId}').then(()=>showToast('已复制','success'))">${short}</span>` },
-            renderTokens = () => {
-                const tb = $('tokenTableBody');
-                const selectAllCb = $('selectAllCheckbox');
+        // showToast must be defined early since many functions depend on it
+        function showToast(m, t = 'info') {
+            const d = document.createElement('div');
+            const bc = { success: 'bg-green-600', error: 'bg-destructive', info: 'bg-primary' };
+            d.className = `fixed bottom-4 right-4 ${bc[t] || bc.info} text-white px-4 py-2.5 rounded-lg shadow-lg text-sm font-medium z-50 animate-slide-up`;
+            d.textContent = m;
+            document.body.appendChild(d);
+            setTimeout(() => {
+                d.style.opacity = '0';
+                d.style.transition = 'opacity .3s';
+                setTimeout(() => d.parentNode && document.body.removeChild(d), 300);
+            }, 2000);
+        }
 
-                // Check if all visible tokens are selected
-                const allSelected = allTokens.length > 0 && allTokens.every(t => selectedTokens.has(t.id));
-                if (selectAllCb) selectAllCb.checked = allSelected;
-                if (selectAllCb) selectAllCb.indeterminate = !allSelected && selectedTokens.size > 0;
+        // Batch operation core function (must be defined before wrappers)
+        async function batchOperate(action) {
+            const ids = Array.from(selectedTokens);
+            if (ids.length === 0) { showToast('请先选择Token', 'info'); return; }
 
-                updateBatchToolbar();
+            const actionNames = {
+                'test': '测试',
+                'enable': '启用',
+                'disable': '禁用',
+                'delete': '删除'
+            };
+            const name = actionNames[action] || action;
 
-                tb.innerHTML = allTokens.map(t => {
-                    const imageDisplay = t.image_enabled ? `${t.image_count || 0}` : '-';
-                    const videoDisplay = (t.video_enabled && t.sora2_supported) ? `${t.video_count || 0}` : '-';
-                    const statusText = t.is_expired ? '已过期' : (t.is_active ? '活跃' : '禁用');
-                    const statusClass = t.is_expired ? 'bg-gray-100 text-gray-700' : (t.is_active ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-700');
-                    const isSelected = selectedTokens.has(t.id);
+            if (!confirm(`确定要批量${name}选中的 ${ids.length} 个Token吗？`)) return;
+            // Double confirm for delete
+            if (action === 'delete' && !confirm(`⚠️ 再次确认：删除后无法恢复，确定要继续吗？`)) return;
 
-                    return `<tr class="${isSelected ? 'bg-blue-50/50' : ''}">
+            try {
+                showToast(`正在批量${name}...`, 'info');
+                const r = await apiRequest('/api/tokens/batch/operate', {
+                    method: 'POST',
+                    body: JSON.stringify({ ids: ids, action: action })
+                });
+
+                if (!r) return;
+                const d = await r.json();
+
+                if (d.success) {
+                    showToast(d.message, 'success');
+
+                    // For test action, show failed emails in popup
+                    if (action === 'test' && d.results) {
+                        const failed = d.results.filter(r => r.status === 'failed' || r.status === 'error');
+                        if (failed.length > 0) {
+                            const failedEmails = failed.map(f => f.email || `ID: ${f.id}`).join('\n');
+                            const msg = failed.some(f => f.auto_disabled)
+                                ? `以下 ${failed.length} 个Token测试失败并已自动禁用：\n\n${failedEmails}`
+                                : `以下 ${failed.length} 个Token测试失败：\n\n${failedEmails}`;
+                            alert(msg);
+                        }
+                    }
+
+                    if (action === 'delete') { selectedTokens.clear(); }
+                    await refreshTokens();
+                } else {
+                    showToast(`操作失败: ${d.message}`, 'error');
+                }
+            } catch (e) {
+                showToast(`请求失败: ${e.message}`, 'error');
+            }
+        }
+
+        // Global batch operation wrappers (use function declarations for hoisting)
+        function doBatchTest() { batchOperate('test'); }
+        function doBatchEnable() { batchOperate('enable'); }
+        function doBatchDisable() { batchOperate('disable'); }
+        function doBatchDelete() { batchOperate('delete'); }
+
+        function $(id) { return document.getElementById(id); }
+        function checkAuth() { const t = localStorage.getItem('adminToken'); return t || (location.href = '/login', null), t; }
+        async function apiRequest(url, opts = {}) { const t = checkAuth(); if (!t) return null; const r = await fetch(url, { ...opts, headers: { ...opts.headers, Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' } }); return r.status === 401 ? (localStorage.removeItem('adminToken'), location.href = '/login', null) : r; }
+        async function loadStats() { try { const r = await apiRequest('/api/stats'); if (!r) return; const d = await r.json(); $('statTotal').textContent = d.total_tokens || 0; $('statActive').textContent = d.active_tokens || 0; $('statImages').textContent = (d.today_images || 0) + '/' + (d.total_images || 0); $('statVideos').textContent = (d.today_videos || 0) + '/' + (d.total_videos || 0); $('statErrors').textContent = (d.today_errors || 0) + '/' + (d.total_errors || 0) } catch (e) { console.error('加载统计失败:', e) } }
+        async function loadTokens() { try { const r = await apiRequest('/api/tokens'); if (!r) return; allTokens = await r.json(); renderTokens() } catch (e) { console.error('加载Token失败:', e) } }
+        const formatExpiry = exp => { if (!exp) return '-'; const d = new Date(exp), now = new Date(), diff = d - now; const dateStr = d.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-'); const timeStr = d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }); if (diff < 0) return `<span class="text-red-600">${dateStr} ${timeStr}</span>`; const days = Math.floor(diff / 864e5); if (days < 7) return `<span class="text-orange-600">${dateStr} ${timeStr}</span>`; return `${dateStr} ${timeStr}` };
+        const formatPlanType = type => { if (!type) return '-'; const typeMap = { 'chatgpt_team': 'Team', 'chatgpt_plus': 'Plus', 'chatgpt_pro': 'Pro', 'chatgpt_free': 'Free' }; return typeMap[type] || type };
+        const formatSora2 = (t) => { if (t.sora2_supported === true) { const remaining = t.sora2_total_count - t.sora2_redeemed_count; const tooltipText = `邀请码: ${t.sora2_invite_code || '无'}\n可用次数: ${remaining}/${t.sora2_total_count}\n已用次数: ${t.sora2_redeemed_count}`; return `<div class="inline-flex items-center gap-1"><span class="inline-flex items-center rounded px-2 py-0.5 text-xs bg-green-50 text-green-700 cursor-pointer" title="${tooltipText}" onclick="copySora2Code('${t.sora2_invite_code || ''}')">支持</span><span class="text-xs text-muted-foreground" title="${tooltipText}">${remaining}/${t.sora2_total_count}</span></div>` } else if (t.sora2_supported === false) { return `<span class="inline-flex items-center rounded px-2 py-0.5 text-xs bg-gray-100 text-gray-700 cursor-pointer" title="点击使用邀请码激活" onclick="openSora2Modal(${t.id})">不支持</span>` } else { return '-' } };
+        const formatPlanTypeWithTooltip = (t) => { const tooltipText = t.subscription_end ? `套餐到期: ${new Date(t.subscription_end).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-')} ${new Date(t.subscription_end).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}` : ''; return `<span class="inline-flex items-center rounded px-2 py-0.5 text-xs bg-blue-50 text-blue-700 cursor-pointer" title="${tooltipText || t.plan_title || '-'}">${formatPlanType(t.plan_type)}</span>` };
+        const formatSora2Remaining = (t) => { if (t.sora2_supported === true) { const remaining = t.sora2_remaining_count || 0; return `<span class="text-xs">${remaining}</span>` } else { return '-' } };
+        const formatClientId = (clientId) => { if (!clientId) return '-'; const short = clientId.substring(0, 8) + '...'; return `<span class="text-xs font-mono cursor-pointer hover:text-primary" title="${clientId}" onclick="navigator.clipboard.writeText('${clientId}').then(()=>showToast('已复制','success'))">${short}</span>` };
+        const renderTokens = () => {
+            const tb = $('tokenTableBody');
+            const selectAllCb = $('selectAllCheckbox');
+
+            // Check if all visible tokens are selected
+            const allSelected = allTokens.length > 0 && allTokens.every(t => selectedTokens.has(t.id));
+            if (selectAllCb) selectAllCb.checked = allSelected;
+            if (selectAllCb) selectAllCb.indeterminate = !allSelected && selectedTokens.size > 0;
+
+            updateBatchToolbar();
+
+            tb.innerHTML = allTokens.map(t => {
+                const imageDisplay = t.image_enabled ? `${t.image_count || 0}` : '-';
+                const videoDisplay = (t.video_enabled && t.sora2_supported) ? `${t.video_count || 0}` : '-';
+                const statusText = t.is_expired ? '已过期' : (t.is_active ? '活跃' : '禁用');
+                const statusClass = t.is_expired ? 'bg-gray-100 text-gray-700' : (t.is_active ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-700');
+                const isSelected = selectedTokens.has(t.id);
+
+                return `<tr class="${isSelected ? 'bg-blue-50/50' : ''}">
                     <td class="py-2.5 px-3">
                         <input type="checkbox" onchange="toggleTokenSelection(${t.id})" ${isSelected ? 'checked' : ''} class="rounded border-gray-300">
                     </td>
@@ -1180,78 +1215,37 @@
                         <button onclick="deleteToken(${t.id})" class="inline-flex items-center justify-center rounded-md hover:bg-destructive/10 hover:text-destructive h-7 px-2 text-xs">删除</button>
                     </td>
                 </tr>`
-                }).join('')
-            },
-            toggleSelectAll = () => {
-                const cb = $('selectAllCheckbox');
-                if (cb.checked) {
-                    allTokens.forEach(t => selectedTokens.add(t.id));
-                } else {
-                    selectedTokens.clear();
-                }
-                renderTokens();
-            },
-            toggleTokenSelection = (id) => {
-                if (selectedTokens.has(id)) {
-                    selectedTokens.delete(id);
-                } else {
-                    selectedTokens.add(id);
-                }
-                renderTokens();
-            },
-            updateBatchToolbar = () => {
-                const count = selectedTokens.size;
-                $('selectedCount').textContent = `已选 ${count} 项`;
-                const toolbar = $('batchToolbar');
-                if (count > 0) {
-                    toolbar.classList.remove('hidden');
-                } else {
-                    toolbar.classList.add('hidden');
-                }
-            },
-            batchOperate = async (action) => {
-                const ids = Array.from(selectedTokens);
-                if (ids.length === 0) return;
-
-                const actionNames = {
-                    'test': '测试',
-                    'enable': '启用',
-                    'disable': '禁用',
-                    'delete': '删除'
-                };
-                const name = actionNames[action] || action;
-
-                if (!confirm(`确定要批量${name}选中的 ${ids.length} 个Token吗？`)) return;
-
-                try {
-                    showToast(`正在批量${name}...`, 'info');
-                    const r = await apiRequest('/api/tokens/batch/operate', {
-                        method: 'POST',
-                        body: JSON.stringify({
-                            ids: ids,
-                            action: action
-                        })
-                    });
-
-                    if (!r) return;
-                    const d = await r.json();
-
-                    if (d.success) {
-                        showToast(d.message, 'success');
-                        // 清空选择
-                        if (action === 'delete') {
-                            selectedTokens.clear();
-                        }
-                        await refreshTokens();
-                    } else {
-                        showToast(`操作失败: ${d.message}`, 'error');
-                    }
-                } catch (e) {
-                    showToast(`请求失败: ${e.message}`, 'error');
-                }
-            },
-            refreshTokens = async () => { await loadTokens(); await loadStats() },
-            openAddModal = () => $('addModal').classList.remove('hidden'),
+            }).join('')
+        };
+        const toggleSelectAll = () => {
+            const cb = $('selectAllCheckbox');
+            if (cb.checked) {
+                allTokens.forEach(t => selectedTokens.add(t.id));
+            } else {
+                selectedTokens.clear();
+            }
+            renderTokens();
+        };
+        const toggleTokenSelection = (id) => {
+            if (selectedTokens.has(id)) {
+                selectedTokens.delete(id);
+            } else {
+                selectedTokens.add(id);
+            }
+            renderTokens();
+        };
+        const updateBatchToolbar = () => {
+            const count = selectedTokens.size;
+            $('selectedCount').textContent = `已选 ${count} 项`;
+            const toolbar = $('batchToolbar');
+            if (count > 0) {
+                toolbar.classList.remove('hidden');
+            } else {
+                toolbar.classList.add('hidden');
+            }
+        };
+        async function refreshTokens() { await loadTokens(); await loadStats() }
+        openAddModal = () => $('addModal').classList.remove('hidden'),
             closeAddModal = () => { $('addModal').classList.add('hidden'); $('addTokenAT').value = ''; $('addTokenST').value = ''; $('addTokenRT').value = ''; $('addTokenClientId').value = ''; $('addTokenProxyUrl').value = ''; $('addTokenRemark').value = ''; $('addTokenImageEnabled').checked = true; $('addTokenVideoEnabled').checked = true; $('addTokenImageConcurrency').value = '-1'; $('addTokenVideoConcurrency').value = '-1'; $('addRTRefreshHint').classList.add('hidden') },
             openEditModal = (id) => { const token = allTokens.find(t => t.id === id); if (!token) return showToast('Token不存在', 'error'); $('editTokenId').value = token.id; $('editTokenAT').value = token.token || ''; $('editTokenST').value = token.st || ''; $('editTokenRT').value = token.rt || ''; $('editTokenClientId').value = token.client_id || ''; $('editTokenProxyUrl').value = token.proxy_url || ''; $('editTokenRemark').value = token.remark || ''; $('editTokenImageEnabled').checked = token.image_enabled !== false; $('editTokenVideoEnabled').checked = token.video_enabled !== false; $('editTokenImageConcurrency').value = token.image_concurrency || '-1'; $('editTokenVideoConcurrency').value = token.video_concurrency || '-1'; $('editModal').classList.remove('hidden') },
             closeEditModal = () => { $('editModal').classList.add('hidden'); $('editTokenId').value = ''; $('editTokenAT').value = ''; $('editTokenST').value = ''; $('editTokenRT').value = ''; $('editTokenClientId').value = ''; $('editTokenProxyUrl').value = ''; $('editTokenRemark').value = ''; $('editTokenImageEnabled').checked = true; $('editTokenVideoEnabled').checked = true; $('editTokenImageConcurrency').value = ''; $('editTokenVideoConcurrency').value = ''; $('editRTRefreshHint').classList.add('hidden') },
@@ -1304,7 +1298,7 @@
             showLogDetail = (logId) => { const log = window.allLogs.find(l => l.id === logId); if (!log) { showToast('日志不存在', 'error'); return } const content = $('logDetailContent'); let detailHtml = ''; if (log.status_code === -1) { detailHtml += `<div class="space-y-2"><h4 class="font-medium text-sm text-blue-600">生成进度</h4><div class="rounded-md border border-blue-200 p-3 bg-blue-50"><p class="text-sm text-blue-700">任务正在生成中...</p>${log.task_status ? `<p class="text-xs text-blue-600 mt-1">状态: ${log.task_status}</p>` : ''}</div></div>` } else if (log.status_code === 200) { try { const responseBody = log.response_body ? JSON.parse(log.response_body) : null; if (responseBody) { if (responseBody.data && responseBody.data.length > 0) { const item = responseBody.data[0]; if (item.url) { detailHtml += `<div class="space-y-2"><h4 class="font-medium text-sm">生成结果</h4><div class="rounded-md border border-border p-3 bg-muted/30"><p class="text-sm mb-2"><span class="font-medium">文件URL:</span></p><a href="${item.url}" target="_blank" class="text-blue-600 hover:underline text-xs break-all">${item.url}</a></div></div>` } else { detailHtml += `<div class="space-y-2"><h4 class="font-medium text-sm">响应数据</h4><pre class="rounded-md border border-border p-3 bg-muted/30 text-xs overflow-x-auto">${JSON.stringify(responseBody, null, 2)}</pre></div>` } } else { detailHtml += `<div class="space-y-2"><h4 class="font-medium text-sm">响应数据</h4><pre class="rounded-md border border-border p-3 bg-muted/30 text-xs overflow-x-auto">${JSON.stringify(responseBody, null, 2)}</pre></div>` } } else { detailHtml += `<div class="space-y-2"><h4 class="font-medium text-sm">响应信息</h4><p class="text-sm text-muted-foreground">无响应数据</p></div>` } } catch (e) { detailHtml += `<div class="space-y-2"><h4 class="font-medium text-sm">响应数据</h4><pre class="rounded-md border border-border p-3 bg-muted/30 text-xs overflow-x-auto">${log.response_body || '无'}</pre></div>` } } else { try { const responseBody = log.response_body ? JSON.parse(log.response_body) : null; if (responseBody && responseBody.error) { detailHtml += `<div class="space-y-2"><h4 class="font-medium text-sm text-red-600">错误原因</h4><div class="rounded-md border border-red-200 p-3 bg-red-50"><p class="text-sm text-red-700">${responseBody.error.message || responseBody.error || '未知错误'}</p></div></div>` } else if (log.response_body && log.response_body !== '{}') { detailHtml += `<div class="space-y-2"><h4 class="font-medium text-sm text-red-600">错误信息</h4><pre class="rounded-md border border-red-200 p-3 bg-red-50 text-xs overflow-x-auto">${log.response_body}</pre></div>` } } catch (e) { if (log.response_body && log.response_body !== '{}') { detailHtml += `<div class="space-y-2"><h4 class="font-medium text-sm text-red-600">错误信息</h4><pre class="rounded-md border border-red-200 p-3 bg-red-50 text-xs overflow-x-auto">${log.response_body}</pre></div>` } } } detailHtml += `<div class="space-y-2 pt-4 border-t border-border"><h4 class="font-medium text-sm">基本信息</h4><div class="grid grid-cols-2 gap-2 text-sm"><div><span class="text-muted-foreground">操作:</span> ${log.operation}</div><div><span class="text-muted-foreground">状态码:</span> <span class="inline-flex items-center rounded px-2 py-0.5 text-xs ${log.status_code === -1 ? 'bg-blue-50 text-blue-700' : log.status_code === 200 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}">${log.status_code === -1 ? '生成中' : log.status_code}</span></div><div><span class="text-muted-foreground">耗时:</span> ${log.duration === -1 ? '生成中' : log.duration.toFixed(2) + '秒'}</div><div><span class="text-muted-foreground">时间:</span> ${log.created_at ? new Date(log.created_at).toLocaleString('zh-CN') : '-'}</div></div></div>`; content.innerHTML = detailHtml; $('logDetailModal').classList.remove('hidden') },
             closeLogDetailModal = () => { $('logDetailModal').classList.add('hidden') },
             clearAllLogs = async () => { if (!confirm('确定要清空所有日志吗？此操作不可恢复！')) return; try { const r = await apiRequest('/api/logs', { method: 'DELETE' }); if (!r) return; const d = await r.json(); if (d.success) { showToast('日志已清空', 'success'); await loadLogs() } else { showToast('清空失败: ' + (d.message || '未知错误'), 'error') } } catch (e) { showToast('清空失败: ' + e.message, 'error') } },
-            showToast = (m, t = 'info') => { const d = document.createElement('div'), bc = { success: 'bg-green-600', error: 'bg-destructive', info: 'bg-primary' }; d.className = `fixed bottom-4 right-4 ${bc[t] || bc.info} text-white px-4 py-2.5 rounded-lg shadow-lg text-sm font-medium z-50 animate-slide-up`; d.textContent = m; document.body.appendChild(d); setTimeout(() => { d.style.opacity = '0'; d.style.transition = 'opacity .3s'; setTimeout(() => d.parentNode && document.body.removeChild(d), 300) }, 2000) },
+            // showToast is now defined at the top of the script
             logout = () => { if (!confirm('确定要退出登录吗?')) return; localStorage.removeItem('adminToken'); location.href = '/login' },
             loadCharacters = async () => { try { const r = await apiRequest('/api/characters'); if (!r) return; const d = await r.json(); const g = $('charactersGrid'); if (!d || d.length === 0) { g.innerHTML = '<div class="col-span-full text-center py-8 text-muted-foreground">暂无角色卡</div>'; return } g.innerHTML = d.map(c => `<div class="rounded-lg border border-border bg-background p-4"><div class="flex items-start gap-3"><img src="${c.avatar_path || '/static/favicon.ico'}" class="h-14 w-14 rounded-lg object-cover" onerror="this.src='/static/favicon.ico'"/><div class="flex-1 min-w-0"><div class="font-semibold truncate">${c.display_name || c.username}</div><div class="text-xs text-muted-foreground truncate">@${c.username}</div>${c.description ? `<div class="text-xs text-muted-foreground mt-1 line-clamp-2">${c.description}</div>` : ''}</div></div><div class="mt-3 flex gap-2"><button onclick="deleteCharacter(${c.id})" class="flex-1 inline-flex items-center justify-center rounded-md border border-destructive text-destructive hover:bg-destructive hover:text-white h-8 px-3 text-sm transition-colors">删除</button></div></div>`).join('') } catch (e) { showToast('加载失败: ' + e.message, 'error') } },
             deleteCharacter = async (id) => { if (!confirm('确定要删除这个角色卡吗?')) return; try { const r = await apiRequest(`/api/characters/${id}`, { method: 'DELETE' }); if (!r) return; const d = await r.json(); if (d.success) { showToast('删除成功', 'success'); await loadCharacters() } else { showToast('删除失败', 'error') } } catch (e) { showToast('删除失败: ' + e.message, 'error') } },
@@ -1320,6 +1314,11 @@
                 }
             }
         });
+        // Expose batch operation functions to global scope for onclick handlers
+        window.batchOperate = batchOperate;
+        window.toggleSelectAll = toggleSelectAll;
+        window.toggleTokenSelection = toggleTokenSelection;
+        window.updateBatchToolbar = updateBatchToolbar;
         window.addEventListener('DOMContentLoaded', () => { checkAuth(); refreshTokens(); loadATAutoRefreshConfig() });
     </script>
 </body>

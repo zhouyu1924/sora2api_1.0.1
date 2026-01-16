@@ -542,7 +542,7 @@ class Database:
                 WHERE is_active = 1
                 AND (cooled_until IS NULL OR cooled_until < CURRENT_TIMESTAMP)
                 AND expiry_time > CURRENT_TIMESTAMP
-                ORDER BY last_used_at ASC NULLS FIRST
+                ORDER BY CASE WHEN last_used_at IS NULL THEN 0 ELSE 1 END, last_used_at ASC
             """)
             rows = await cursor.fetchall()
             return [Token(**dict(row)) for row in rows]
