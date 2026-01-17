@@ -50,11 +50,11 @@ at_auto_refresh_enabled = false
 enabled = true
 # 多个 Worker URL，用逗号分隔，系统会轮询使用
 # 部署多个Worker可以分散请求，减少429错误
-worker_urls = "https://wandering-term-80c2.woodrow-lowman.workers.dev/,https://tiny-mud-745b.woodrow-lowman.workers.dev/,https://quiet-frost-a5f6.woodrow-lowman.workers.dev/,https://shy-field-fd03.woodrow-lowman.workers.dev/,https://broken-unit-bb74.woodrow-lowman.workers.dev/"
+worker_urls = ""
 # 如果有多个Worker，用逗号分隔，例如:
 # worker_urls = "https://worker1.xxx.workers.dev/,https://worker2.xxx.workers.dev/"
 # Worker 鉴权令牌 (需要与 Worker 环境变量 WORKER_TOKEN 一致)
-worker_token = "huiasgfuio786aguie"
+worker_token = ""
 
 [rate_limit]
 # 请求间隔（秒），避免触发Cloudflare限制
