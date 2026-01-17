@@ -138,6 +138,11 @@
                             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
                         </svg>
                     </button>
+                    <button onclick="doSelectDisabled()"
+                        class="inline-flex items-center justify-center rounded-md border border-input bg-background hover:bg-accent h-8 px-3 text-xs"
+                        title="选中所有禁用Token">
+                        选中禁用
+                    </button>
                     <button onclick="exportTokens()"
                         class="inline-flex items-center justify-center rounded-md bg-blue-600 text-white hover:bg-blue-700 h-8 px-3"
                         title="导出所有Token">
@@ -1163,6 +1168,19 @@
         function doBatchEnable() { batchOperate('enable'); }
         function doBatchDisable() { batchOperate('disable'); }
         function doBatchDelete() { batchOperate('delete'); }
+        function doSelectDisabled() {
+            let count = 0;
+            if (window.allTokens) {
+                window.allTokens.forEach(t => {
+                    if (!t.is_active) {
+                        window.selectedTokens.add(t.id);
+                        count++;
+                    }
+                });
+                renderTokens();
+                showToast(`已选中 ${count} 个禁用Token`, 'info');
+            }
+        }
 
         function $(id) { return document.getElementById(id); }
         function checkAuth() { const t = localStorage.getItem('adminToken'); return t || (location.href = '/login', null), t; }

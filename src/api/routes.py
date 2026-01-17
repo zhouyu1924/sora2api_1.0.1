@@ -6,7 +6,7 @@ from typing import List
 import json
 import re
 from ..core.auth import verify_api_key_header
-from ..core.models import ChatCompletionRequest
+from ..core.models import ChatCompletionRequest, ImageGenerationRequest
 from ..services.generation_handler import GenerationHandler, MODEL_CONFIG
 
 router = APIRouter()
@@ -245,6 +245,97 @@ async def create_chat_completion(
     except Exception as e:
         # Return OpenAI-compatible error format
         return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "message": str(e),
+                    "type": "server_error",
+                    "param": None,
+                    "code": None
+                }
+            }
+        )
+
+@router.post("/v1/images/generations")
+async def create_image_generation(
+    request: ImageGenerationRequest,
+    api_key: str = Depends(verify_api_key_header)
+):
+    """Create image generation (standard OpenAI endpoint)"""
+    try:
+        prompt = request.prompt
+        
+        # Call generation handler with stream=True because stream=False is only an availability check
+        # We will collect the chunks and extract the URL from the final markdown
+        
+        final_content = ""
+        
+        async for chunk in generation_handler.handle_generation(
+            model=request.model,
+            prompt=prompt,
+            stream=True 
+        ):
+            # Parse chunk which is a JSON string data: {...} or similar structure
+            # The structure from handle_generation is usually a string: "data: {json}\n\n"
+            # or just the JSON object directly if not strictly SSE formatted (but handler does format it)
+            
+            # handle_generation returns "formatted stream chunks" which are JSON strings representing the chunk object.
+            # But wait, looking at _format_stream_chunk, it returns a DICT? No, it returns a STRING?
+            # Let's check _format_stream_chunk in generation_handler.py
+            # It returns a DICT? 
+            # No, lines 1192-1205 construct a dict. 
+            # Then line 1205: return json.dumps(response, ensure_ascii=False)
+            
+            # However, handle_generation yields what _format_stream_chunk returns.
+            # So 'chunk' is a JSON string.
+            
+            try:
+                # Remove "data: " prefix if present (SSE format)
+                clean_chunk = chunk
+                if chunk.startswith("data: "):
+                    clean_chunk = chunk[6:]
+                
+                if clean_chunk.strip() == "[DONE]":
+                    continue
+                    
+                chunk_data = json.loads(clean_chunk)
+                choices = chunk_data.get("choices", [])
+                if choices:
+                    delta = choices[0].get("delta", {})
+                    content = delta.get("content")
+                    if content:
+                        final_content += content
+            except json.JSONDecodeError:
+                pass
+
+        # Extract URL from markdown: ![Generated Image](url)
+        # Regex to find URL
+        urls = re.findall(r'!\[Generated Image\]\((.*?)\)', final_content)
+        
+        if urls:
+            return {
+                "created": int(datetime.now().timestamp()),
+                "data": [{"url": url} for url in urls]
+            }
+        else:
+             # Fallback: check if content contains a raw URL
+             # or return the error content found
+             
+             # If no URLs found, it might have failed or output reasoning only
+             return JSONResponse(
+                status_code=500,
+                content={
+                    "error": {
+                        "message": "Generation completed but no image URL could be extracted",
+                        "type": "server_error",
+                        "param": None,
+                        "code": None
+                    }
+                }
+            )
+
+    except Exception as e:
+         return JSONResponse(
             status_code=500,
             content={
                 "error": {

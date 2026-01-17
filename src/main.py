@@ -141,10 +141,14 @@ async def startup_event():
     # Start file cache cleanup task
     await generation_handler.file_cache.start_cleanup_task()
 
+    # Start token auto-refresh task
+    await token_manager.start_auto_refresh_task()
+
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
     await generation_handler.file_cache.stop_cleanup_task()
+    await token_manager.stop_auto_refresh_task()
 
 if __name__ == "__main__":
     uvicorn.run(

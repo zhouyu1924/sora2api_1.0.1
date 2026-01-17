@@ -355,26 +355,85 @@ async def delete_token(token_id: int, token: str = Depends(verify_admin_token)):
 
 @router.post("/api/tokens/batch/test-update")
 async def batch_test_update(token: str = Depends(verify_admin_token)):
-    """Test and update all tokens by fetching their status from upstream"""
+    """Test and update all tokens by fetching their status from upstream (Concurrent)"""
     try:
         tokens = await db.get_all_tokens()
         success_count = 0
         failed_count = 0
         results = []
+        
+        # Get worker URLs for rotation
+        worker_urls = config.cf_worker_urls
+        print(f"🔄 Batch Test: Loaded {len(worker_urls)} worker URLs for rotation")
 
-        for token_obj in tokens:
-            try:
-                # Test token and update account info (same as single test)
-                result = await token_manager.test_token(token_obj.id)
-                if result.get("valid"):
+        # Concurrent processing helper
+        async def process_token(token_obj, worker_url: Optional[str], index: int):
+            """Process a single token with retry logic"""
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    result = await token_manager.test_token(token_obj.id, worker_url=worker_url)
+                    if result.get("valid"):
+                        status = "success"
+                        if not token_obj.is_active:
+                            status = "restored"
+                        await token_manager.enable_token(token_obj.id)
+                        return {"id": token_obj.id, "email": token_obj.email, "status": status, "valid": True}
+                    else:
+                        await token_manager.disable_token(token_obj.id)
+                        return {"id": token_obj.id, "email": token_obj.email, "status": "failed", "message": result.get("message"), "auto_disabled": True, "valid": False}
+                except Exception as e:
+                    error_str = str(e)
+                    if "429" in error_str and attempt < max_retries - 1:
+                        wait_time = 60 + secrets.randbelow(10)
+                        print(f"⚠️ Batch Test 遇到429 (尝试 {attempt+1}/{max_retries}): {token_obj.email} - 等待 {wait_time}秒后重试...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    
+                    await token_manager.disable_token(token_obj.id)
+                    return {"id": token_obj.id, "email": token_obj.email, "status": "error", "message": str(e), "auto_disabled": True, "valid": False}
+            
+            # Should not reach here, but just in case
+            return {"id": token_obj.id, "email": token_obj.email, "status": "error", "message": "Unknown error", "valid": False}
+
+        # Process in chunks of 10 for concurrency
+        chunk_size = 10
+        total_tokens = len(tokens)
+        
+        for i in range(0, total_tokens, chunk_size):
+            chunk = tokens[i:i + chunk_size]
+            batch_index = i // chunk_size
+            
+            # Determine worker_url for this batch (rotate every 8 chunks = 80 tokens)
+            worker_url = None
+            if worker_urls:
+                worker_index = (batch_index // 8) % len(worker_urls)
+                worker_url = worker_urls[worker_index]
+                if batch_index % 8 == 0:
+                    print(f"🔄 Batch Test: Switching to worker {worker_index + 1}/{len(worker_urls)}: {worker_url} (Token {i+1})")
+            
+            # Safety Pause: if no workers and we've processed 80 tokens, pause to avoid 429
+            if not worker_urls and i > 0 and i % 80 == 0:
+                print(f"🛑 Batch Test: 直连模式已处理 {i} 个Token，触发安全暂停 (60s) 以避免429...")
+                await asyncio.sleep(60)
+
+            # Process chunk concurrently
+            tasks = [process_token(token_obj, worker_url, i + j) for j, token_obj in enumerate(chunk)]
+            chunk_results = await asyncio.gather(*tasks)
+            
+            # Aggregate results
+            for res in chunk_results:
+                if res.get("valid"):
                     success_count += 1
-                    results.append({"id": token_obj.id, "email": token_obj.email, "status": "success"})
                 else:
                     failed_count += 1
-                    results.append({"id": token_obj.id, "email": token_obj.email, "status": "failed", "message": result.get("message")})
-            except Exception as e:
-                failed_count += 1
-                results.append({"id": token_obj.id, "email": token_obj.email, "status": "error", "message": str(e)})
+                # Remove internal 'valid' key before adding to results
+                res_copy = {k: v for k, v in res.items() if k != "valid"}
+                results.append(res_copy)
+            
+            # Small delay between chunks to avoid bursting
+            if i + chunk_size < total_tokens:
+                await asyncio.sleep(1)
 
         return {
             "success": True,
@@ -428,21 +487,28 @@ async def batch_delete_disabled(token: str = Depends(verify_admin_token)):
 
 @router.post("/api/tokens/import")
 async def import_tokens(request: ImportTokensRequest, token: str = Depends(verify_admin_token)):
-    """Import tokens with different modes: offline/at/st/rt (Concurrent)"""
+    """Import tokens with different modes: offline/at/st/rt (Concurrent with batching)"""
     mode = request.mode  # offline/at/st/rt
     
-    # Results counters (thread-safe not needed for atomic increments in async loop, but results list usage is fine)
+    # Results counters
     added_count = 0
     updated_count = 0
     failed_count = 0
     results = []
 
-    # Concurrency limit
-    sem = asyncio.Semaphore(10)  # Max 10 concurrent imports
+    # Get worker URLs for rotation
+    worker_urls = config.cf_worker_urls
+    print(f"🔄 Import: Loaded {len(worker_urls)} worker URLs for rotation")
 
-    async def process_item(import_item: ImportTokenItem):
-        nonlocal added_count, updated_count, failed_count
-        async with sem:
+    # Concurrency limit for chunks (processing 10 at a time)
+    # We will process in explicit chunks of 10 rather than just semaphore
+    
+    async def process_item(import_item: ImportTokenItem, worker_url: Optional[str] = None):
+        max_retries = 3
+        # If using direct connection (no worker_url), we might hit 429 more easily
+        # If using worker_url, we rely on rotation, but if that fails, we still retry
+        
+        for attempt in range(max_retries):
             try:
                 # Step 1: Get or convert access_token based on mode
                 access_token = None
@@ -469,7 +535,8 @@ async def import_tokens(request: ImportTokensRequest, token: str = Depends(verif
                     # Convert ST to AT
                     st_result = await token_manager.st_to_at(
                         import_item.session_token,
-                        proxy_url=import_item.proxy_url
+                        proxy_url=import_item.proxy_url,
+                        worker_url=worker_url
                     )
                     access_token = st_result["access_token"]
                     # Update email if API returned it
@@ -485,7 +552,8 @@ async def import_tokens(request: ImportTokensRequest, token: str = Depends(verif
                     rt_result = await token_manager.rt_to_at(
                         import_item.refresh_token,
                         client_id=import_item.client_id,
-                        proxy_url=import_item.proxy_url
+                        proxy_url=import_item.proxy_url,
+                        worker_url=worker_url
                     )
                     access_token = rt_result["access_token"]
                     # Update RT if API returned new one
@@ -515,7 +583,8 @@ async def import_tokens(request: ImportTokensRequest, token: str = Depends(verif
                         video_enabled=import_item.video_enabled,
                         image_concurrency=import_item.image_concurrency,
                         video_concurrency=import_item.video_concurrency,
-                        skip_status_update=skip_status
+                        skip_status_update=skip_status,
+                        worker_url=worker_url
                     )
                     # Update active status
                     await token_manager.update_token_status(existing_token.id, import_item.is_active)
@@ -550,7 +619,8 @@ async def import_tokens(request: ImportTokensRequest, token: str = Depends(verif
                         image_concurrency=import_item.image_concurrency,
                         video_concurrency=import_item.video_concurrency,
                         skip_status_update=skip_status,
-                        email=import_item.email  # Pass email for offline mode
+                        email=import_item.email,  # Pass email for offline mode
+                        worker_url=worker_url
                     )
                     # Set active status
                     if not import_item.is_active:
@@ -572,29 +642,74 @@ async def import_tokens(request: ImportTokensRequest, token: str = Depends(verif
                         }
                     }
             except Exception as e:
-                return {
-                    "type": "failed",
-                    "data": {
-                        "email": import_item.email,
-                        "status": "failed",
-                        "success": False,
-                        "error": str(e)
+                # Check for 429 and retry
+                error_str = str(e)
+                if "429" in error_str and attempt < max_retries - 1:
+                    wait_time = 60 + secrets.randbelow(10)  # Random wait 60-70s
+                    print(f"⚠️ 导入遇到429 (尝试 {attempt+1}/{max_retries}): {import_item.email} - 等待 {wait_time}秒后重试...")
+                    await asyncio.sleep(wait_time)
+                    continue
+                
+                # If exhausted retries or other error
+                if attempt == max_retries - 1:
+                    print(f"❌ 导入失败 ({import_item.email}): {error_str}")
+                    return {
+                        "type": "failed",
+                        "data": {
+                            "email": import_item.email,
+                            "status": "failed",
+                            "success": False,
+                            "error": str(e)
+                        }
                     }
-                }
 
-    # Execute all tasks concurrently
-    tasks = [process_item(item) for item in request.tokens]
-    processed_results = await asyncio.gather(*tasks)
+    # Execute tasks in chunks of 10
+    chunk_size = 10
+    total_items = len(request.tokens)
+    
+    # Track successful items for safety pause (only relevant for direct connection)
+    processed_count = 0
+    
+    for i in range(0, total_items, chunk_size):
+        chunk = request.tokens[i:i + chunk_size]
+        
+        # Determine worker_url (rotate every 8 chunks = 80 items)
+        batch_index = i // chunk_size
+        worker_url = None
+        current_worker_urls = config.cf_worker_urls
+        
+        if current_worker_urls:
+            worker_index = (batch_index // 8) % len(current_worker_urls)
+            worker_url = current_worker_urls[worker_index]
+            # Log rotation (only once per rotation change)
+            if batch_index % 8 == 0:
+                print(f"🔄 Import: Switching to worker {worker_index + 1}/{len(current_worker_urls)}: {worker_url} (Batch {batch_index+1})")
+        
+        # Safety Pause Check (if NO workers are used)
+        # Avoid triggering 429 on local IP after ~80 requests
+        if not current_worker_urls and processed_count > 0 and processed_count % 80 == 0:
+            print(f"🛑 检测到直连模式且已处理 {processed_count} 个Token，触发安全暂停 (60s) 以避免429...")
+            await asyncio.sleep(60)
 
-    # Aggregate results for thread safety (simple addition)
-    for res in processed_results:
-        if res["type"] == "added":
-            added_count += 1
-        elif res["type"] == "updated":
-            updated_count += 1
-        elif res["type"] == "failed":
-            failed_count += 1
-        results.append(res["data"])
+        # Create tasks for this chunk
+        tasks = [process_item(item, worker_url) for item in chunk]
+        processed_results = await asyncio.gather(*tasks)
+
+        # Aggregate results
+        for res in processed_results:
+            if res["type"] == "added":
+                added_count += 1
+            elif res["type"] == "updated":
+                updated_count += 1
+            elif res["type"] == "failed":
+                failed_count += 1
+            results.append(res["data"])
+            
+        processed_count += len(chunk)
+        
+        # Add a small delay between chunks to avoid bursting
+        if i + chunk_size < total_items:
+            await asyncio.sleep(2)
 
     return {
         "success": True,

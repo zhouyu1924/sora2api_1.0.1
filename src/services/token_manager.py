@@ -20,6 +20,8 @@ class TokenManager:
         self._lock = asyncio.Lock()
         self.proxy_manager = ProxyManager(db)
         self.fake = Faker()
+        self._refresh_task = None
+        self._stop_refresh_event = asyncio.Event()
     
     async def decode_jwt(self, token: str) -> dict:
         """Decode JWT token without verification"""
@@ -59,7 +61,7 @@ class TokenManager:
         # 转换为小写
         return format_choice.lower()
 
-    async def get_user_info(self, access_token: str, token_id: Optional[int] = None, proxy_url: Optional[str] = None) -> dict:
+    async def get_user_info(self, access_token: str, token_id: Optional[int] = None, proxy_url: Optional[str] = None, worker_url: Optional[str] = None) -> dict:
         """Get user info from Sora API"""
         proxy_url = await self.proxy_manager.get_proxy_url(token_id, proxy_url)
 
@@ -71,6 +73,12 @@ class TokenManager:
                 "Referer": "https://sora.chatgpt.com/"
             }
 
+            if worker_url:
+                url = f"{worker_url}/me"
+                headers["X-Proxy-Token"] = config.cf_worker_token
+            else:
+                url = f"{config.sora_base_url}/me"
+
             kwargs = {
                 "headers": headers,
                 "timeout": 30,
@@ -80,10 +88,7 @@ class TokenManager:
             if proxy_url:
                 kwargs["proxy"] = proxy_url
 
-            response = await session.get(
-                f"{config.sora_base_url}/me",
-                **kwargs
-            )
+            response = await session.get(url, **kwargs)
 
             if response.status_code != 200:
                 # Check for token_invalidated error
@@ -95,13 +100,18 @@ class TokenManager:
                             raise ValueError(f"401 token_invalidated: Token has been invalidated")
                     except (ValueError, KeyError):
                         pass
+                
+                # Check for rate limit (429)
+                if response.status_code == 429:
+                    raise ValueError(f"429 Rate Limit Exceeded: Too many requests")
+
                 raise ValueError(f"Failed to get user info: {response.status_code}")
 
             return response.json()
 
-    async def get_subscription_info(self, token: str, token_id: Optional[int] = None, proxy_url: Optional[str] = None) -> Dict[str, Any]:
+    async def get_subscription_info(self, token: str, token_id: Optional[int] = None, proxy_url: Optional[str] = None, worker_url: Optional[str] = None) -> Dict[str, Any]:
         """Get subscription information from Sora API
-
+        
         Returns:
             {
                 "plan_type": "chatgpt_team",
@@ -117,7 +127,12 @@ class TokenManager:
         }
 
         async with AsyncSession() as session:
-            url = "https://sora.chatgpt.com/backend/billing/subscriptions"
+            if worker_url:
+                url = f"{worker_url}/backend/billing/subscriptions"
+                headers["X-Proxy-Token"] = config.cf_worker_token
+            else:
+                url = "https://sora.chatgpt.com/backend/billing/subscriptions"
+            
             print(f"📡 请求 URL: {url}")
             print(f"🔑 使用 Token: {token[:30]}...")
 
@@ -172,7 +187,7 @@ class TokenManager:
 
                 raise Exception(f"Failed to get subscription info: {response.status_code}")
 
-    async def get_sora2_invite_code(self, access_token: str, token_id: Optional[int] = None, proxy_url: Optional[str] = None) -> dict:
+    async def get_sora2_invite_code(self, access_token: str, token_id: Optional[int] = None, proxy_url: Optional[str] = None, worker_url: Optional[str] = None) -> dict:
         """Get Sora2 invite code"""
         proxy_url = await self.proxy_manager.get_proxy_url(token_id, proxy_url)
 
@@ -183,6 +198,12 @@ class TokenManager:
                 "Authorization": f"Bearer {access_token}",
                 "Accept": "application/json"
             }
+            
+            if worker_url:
+                url = f"{worker_url}/backend/project_y/invite/mine"
+                headers["X-Proxy-Token"] = config.cf_worker_token
+            else:
+                url = "https://sora.chatgpt.com/backend/project_y/invite/mine"
 
             kwargs = {
                 "headers": headers,
@@ -195,7 +216,7 @@ class TokenManager:
                 print(f"🌐 使用代理: {proxy_url}")
 
             response = await session.get(
-                "https://sora.chatgpt.com/backend/project_y/invite/mine",
+                url,
                 **kwargs
             )
 
@@ -230,8 +251,12 @@ class TokenManager:
 
                         # Try to activate Sora2
                         try:
+                            activate_url = "https://sora.chatgpt.com/backend/m/bootstrap"
+                            if worker_url:
+                                activate_url = f"{worker_url}/backend/m/bootstrap"
+                            
                             activate_response = await session.get(
-                                "https://sora.chatgpt.com/backend/m/bootstrap",
+                                activate_url,
                                 **kwargs
                             )
 
@@ -240,7 +265,7 @@ class TokenManager:
 
                                 # Retry getting invite code
                                 retry_response = await session.get(
-                                    "https://sora.chatgpt.com/backend/project_y/invite/mine",
+                                    url,
                                     **kwargs
                                 )
 
@@ -272,9 +297,9 @@ class TokenManager:
                     "invite_code": None
                 }
 
-    async def get_sora2_remaining_count(self, access_token: str, token_id: Optional[int] = None, proxy_url: Optional[str] = None) -> dict:
+    async def get_sora2_remaining_count(self, access_token: str, token_id: Optional[int] = None, proxy_url: Optional[str] = None, worker_url: Optional[str] = None) -> dict:
         """Get Sora2 remaining video count
-
+        
         Returns:
             {
                 "remaining_count": 27,
@@ -293,6 +318,12 @@ class TokenManager:
                 "User-Agent" : "Sora/1.2026.007 (Android 15; 24122RKC7C; build 2600700)"
             }
 
+            if worker_url:
+                url = f"{worker_url}/backend/nf/check"
+                headers["X-Proxy-Token"] = config.cf_worker_token
+            else:
+                url = "https://sora.chatgpt.com/backend/nf/check"
+
             kwargs = {
                 "headers": headers,
                 "timeout": 30,
@@ -304,7 +335,7 @@ class TokenManager:
                 print(f"🌐 使用代理: {proxy_url}")
 
             response = await session.get(
-                "https://sora.chatgpt.com/backend/nf/check",
+                url,
                 **kwargs
             )
 
@@ -330,7 +361,7 @@ class TokenManager:
                     "error": f"Failed to get remaining count: {response.status_code}"
                 }
 
-    async def check_username_available(self, access_token: str, username: str) -> bool:
+    async def check_username_available(self, access_token: str, username: str, worker_url: Optional[str] = None) -> bool:
         """Check if username is available
 
         Args:
@@ -361,8 +392,14 @@ class TokenManager:
                 kwargs["proxy"] = proxy_url
                 print(f"🌐 使用代理: {proxy_url}")
 
+            if worker_url:
+                url = f"{worker_url}/backend/project_y/profile/username/check"
+                headers["X-Proxy-Token"] = config.cf_worker_token
+            else:
+                url = "https://sora.chatgpt.com/backend/project_y/profile/username/check"
+
             response = await session.post(
-                "https://sora.chatgpt.com/backend/project_y/profile/username/check",
+                url,
                 **kwargs
             )
 
@@ -378,7 +415,7 @@ class TokenManager:
                 print(f"📄 响应内容: {response.text[:500]}")
                 return False
 
-    async def set_username(self, access_token: str, username: str) -> dict:
+    async def set_username(self, access_token: str, username: str, worker_url: Optional[str] = None) -> dict:
         """Set username for the account
 
         Args:
@@ -409,8 +446,14 @@ class TokenManager:
                 kwargs["proxy"] = proxy_url
                 print(f"🌐 使用代理: {proxy_url}")
 
+            if worker_url:
+                url = f"{worker_url}/backend/project_y/profile/username/set"
+                headers["X-Proxy-Token"] = config.cf_worker_token
+            else:
+                url = "https://sora.chatgpt.com/backend/project_y/profile/username/set"
+
             response = await session.post(
-                "https://sora.chatgpt.com/backend/project_y/profile/username/set",
+                url,
                 **kwargs
             )
 
@@ -425,7 +468,7 @@ class TokenManager:
                 print(f"📄 响应内容: {response.text[:500]}")
                 raise Exception(f"Failed to set username: {response.status_code}")
 
-    async def activate_sora2_invite(self, access_token: str, invite_code: str) -> dict:
+    async def activate_sora2_invite(self, access_token: str, invite_code: str, worker_url: Optional[str] = None) -> dict:
         """Activate Sora2 with invite code"""
         import uuid
         proxy_url = await self.proxy_manager.get_proxy_url()
@@ -457,8 +500,14 @@ class TokenManager:
                 kwargs["proxy"] = proxy_url
                 print(f"🌐 使用代理: {proxy_url}")
 
+            if worker_url:
+                url = f"{worker_url}/backend/project_y/invite/accept"
+                headers["X-Proxy-Token"] = config.cf_worker_token
+            else:
+                url = "https://sora.chatgpt.com/backend/project_y/invite/accept"
+
             response = await session.post(
-                "https://sora.chatgpt.com/backend/project_y/invite/accept",
+                url,
                 **kwargs
             )
 
@@ -476,7 +525,7 @@ class TokenManager:
                 print(f"📄 响应内容: {response.text[:500]}")
                 raise Exception(f"Failed to activate Sora2: {response.status_code}")
 
-    async def st_to_at(self, session_token: str, proxy_url: Optional[str] = None) -> dict:
+    async def st_to_at(self, session_token: str, proxy_url: Optional[str] = None, worker_url: Optional[str] = None) -> dict:
         """Convert Session Token to Access Token"""
         debug_logger.log_info(f"[ST_TO_AT] 开始转换 Session Token 为 Access Token...")
         proxy_url = await self.proxy_manager.get_proxy_url(proxy_url=proxy_url)
@@ -499,7 +548,13 @@ class TokenManager:
                 kwargs["proxy"] = proxy_url
                 debug_logger.log_info(f"[ST_TO_AT] 使用代理: {proxy_url}")
 
-            url = "https://sora.chatgpt.com/api/auth/session"
+            if worker_url:
+                url = f"{worker_url}/api/auth/session"
+                headers["X-Proxy-Token"] = config.cf_worker_token
+                headers["X-Target-Upstream"] = "https://sora.chatgpt.com"
+            else:
+                url = "https://sora.chatgpt.com/api/auth/session"
+            
             debug_logger.log_info(f"[ST_TO_AT] 📡 请求 URL: {url}")
 
             try:
@@ -556,13 +611,14 @@ class TokenManager:
                 debug_logger.log_info(f"[ST_TO_AT] 🔴 异常: {str(e)}")
                 raise
     
-    async def rt_to_at(self, refresh_token: str, client_id: Optional[str] = None, proxy_url: Optional[str] = None) -> dict:
+    async def rt_to_at(self, refresh_token: str, client_id: Optional[str] = None, proxy_url: Optional[str] = None, worker_url: Optional[str] = None) -> dict:
         """Convert Refresh Token to Access Token
 
         Args:
             refresh_token: Refresh Token
             client_id: Client ID (optional, uses default if not provided)
             proxy_url: Proxy URL (optional, uses global proxy if not provided)
+            worker_url: Cloudflare Worker URL (optional)
         """
         # Use provided client_id or default
         effective_client_id = client_id or "app_LlGpXReQgckcGGUo2JrYvtJK"
@@ -576,6 +632,14 @@ class TokenManager:
                 "Accept": "application/json",
                 "Content-Type": "application/json"
             }
+
+            if worker_url:
+                # Use Worker with target override
+                url = f"{worker_url}/oauth/token"
+                headers["X-Proxy-Token"] = config.cf_worker_token
+                headers["X-Target-Upstream"] = "https://auth.openai.com"
+            else:
+                url = "https://auth.openai.com/oauth/token"
 
             kwargs = {
                 "headers": headers,
@@ -592,8 +656,7 @@ class TokenManager:
             if proxy_url:
                 kwargs["proxy"] = proxy_url
                 debug_logger.log_info(f"[RT_TO_AT] 使用代理: {proxy_url}")
-
-            url = "https://auth.openai.com/oauth/token"
+            
             debug_logger.log_info(f"[RT_TO_AT] 📡 请求 URL: {url}")
 
             try:
@@ -662,7 +725,8 @@ class TokenManager:
                        image_concurrency: int = -1,
                        video_concurrency: int = -1,
                        skip_status_update: bool = False,
-                       email: Optional[str] = None) -> Token:
+                       email: Optional[str] = None,
+                       worker_url: Optional[str] = None) -> Token:
         """Add a new Access Token to database
 
         Args:
@@ -720,9 +784,9 @@ class TokenManager:
             name = email.split("@")[0] if email else ""
         else:
             # Parallel execution of API calls
-            user_info_task = self.get_user_info(token_value, proxy_url=proxy_url)
-            sub_info_task = self.get_subscription_info(token_value, proxy_url=proxy_url)
-            sora2_info_task = self.get_sora2_invite_code(token_value, proxy_url=proxy_url)
+            user_info_task = self.get_user_info(token_value, proxy_url=proxy_url, worker_url=worker_url)
+            sub_info_task = self.get_subscription_info(token_value, proxy_url=proxy_url, worker_url=worker_url)
+            sora2_info_task = self.get_sora2_invite_code(token_value, proxy_url=proxy_url, worker_url=worker_url)
 
             results = await asyncio.gather(user_info_task, sub_info_task, sora2_info_task, return_exceptions=True)
             user_info_res, sub_info_res, sora2_info_res = results
@@ -776,7 +840,7 @@ class TokenManager:
                 # Note: This still needs to be sequential if it depends on sora2_supported
                 if sora2_supported:
                     try:
-                        remaining_info = await self.get_sora2_remaining_count(token_value, proxy_url=proxy_url)
+                        remaining_info = await self.get_sora2_remaining_count(token_value, proxy_url=proxy_url, worker_url=worker_url)
                         if remaining_info.get("success"):
                             sora2_remaining_count = remaining_info.get("remaining_count", 0)
                             print(f"✅ Sora2剩余次数: {sora2_remaining_count}")
@@ -786,7 +850,7 @@ class TokenManager:
             # Check and set username if needed
             try:
                 # Get fresh user info to check username
-                user_info = await self.get_user_info(token_value, proxy_url=proxy_url)
+                user_info = await self.get_user_info(token_value, proxy_url=proxy_url, worker_url=worker_url)
                 username = user_info.get("username")
 
                 # If username is null, need to set one
@@ -800,10 +864,10 @@ class TokenManager:
                         print(f"🔄 尝试用户名 ({attempt + 1}/{max_attempts}): {generated_username}")
 
                         # Check if username is available
-                        if await self.check_username_available(token_value, generated_username):
+                        if await self.check_username_available(token_value, generated_username, worker_url=worker_url):
                             # Set the username
                             try:
-                                await self.set_username(token_value, generated_username)
+                                await self.set_username(token_value, generated_username, worker_url=worker_url)
                                 print(f"✅ 用户名设置成功: {generated_username}")
                                 break
                             except Exception as e:
@@ -919,7 +983,8 @@ class TokenManager:
                           video_enabled: Optional[bool] = None,
                           image_concurrency: Optional[int] = None,
                           video_concurrency: Optional[int] = None,
-                          skip_status_update: bool = False):
+                          skip_status_update: bool = False,
+                          worker_url: Optional[str] = None):
         """Update token (AT, ST, RT, client_id, proxy_url, remark, image_enabled, video_enabled, concurrency limits)"""
         # If token (AT) is updated, decode JWT to get new expiry time
         expiry_time = None
@@ -937,7 +1002,7 @@ class TokenManager:
         # If token (AT) is updated and not in offline mode, test it and clear expired flag if valid
         if token and not skip_status_update:
             try:
-                test_result = await self.test_token(token_id)
+                test_result = await self.test_token(token_id, worker_url=worker_url)
                 if test_result.get("valid"):
                     # Token is valid, enable it and clear expired flag
                     await self.db.update_token_status(token_id, True)
@@ -969,7 +1034,7 @@ class TokenManager:
         """Disable a token"""
         await self.db.update_token_status(token_id, False)
 
-    async def test_token(self, token_id: int) -> dict:
+    async def test_token(self, token_id: int, worker_url: Optional[str] = None) -> dict:
         """Test if a token is valid by calling Sora API and refresh account info (subscription + Sora2)"""
         # Get token from database
         token_data = await self.db.get_token(token_id)
@@ -978,9 +1043,9 @@ class TokenManager:
 
         try:
             # Parallel execution
-            user_info_task = self.get_user_info(token_data.token, token_id)
-            sub_info_task = self.get_subscription_info(token_data.token, token_id)
-            sora2_info_task = self.get_sora2_invite_code(token_data.token, token_id)
+            user_info_task = self.get_user_info(token_data.token, token_id, worker_url=worker_url)
+            sub_info_task = self.get_subscription_info(token_data.token, token_id, worker_url=worker_url)
+            sora2_info_task = self.get_sora2_invite_code(token_data.token, token_id, worker_url=worker_url)
 
             results = await asyncio.gather(user_info_task, sub_info_task, sora2_info_task, return_exceptions=True)
             user_info_res, sub_info_res, sora2_info_res = results
@@ -1021,7 +1086,7 @@ class TokenManager:
                  # If Sora2 is supported, get remaining count
                  if sora2_supported:
                      try:
-                         remaining_info = await self.get_sora2_remaining_count(token_data.token, token_id)
+                         remaining_info = await self.get_sora2_remaining_count(token_data.token, token_id, worker_url=worker_url)
                          if remaining_info.get("success"):
                              sora2_remaining_count = remaining_info.get("remaining_count", 0)
                      except Exception as e:
@@ -1155,7 +1220,7 @@ class TokenManager:
         except Exception as e:
             print(f"Error in refresh_sora2_remaining_if_cooldown_expired: {e}")
 
-    async def auto_refresh_expiring_token(self, token_id: int) -> bool:
+    async def auto_refresh_expiring_token(self, token_id: int, worker_url: Optional[str] = None) -> bool:
         """
         Auto refresh token when expiry time is within 24 hours using ST or RT
 
@@ -1209,7 +1274,7 @@ class TokenManager:
             if token_data.st:
                 try:
                     debug_logger.log_info(f"[AUTO_REFRESH] 📝 Token {token_id}: 尝试使用 ST 刷新...")
-                    result = await self.st_to_at(token_data.st)
+                    result = await self.st_to_at(token_data.st, worker_url=worker_url)
                     new_at = result.get("access_token")
                     new_st = token_data.st  # ST refresh doesn't return new ST, so keep the old one
                     refresh_method = "ST"
@@ -1222,7 +1287,7 @@ class TokenManager:
             if not new_at and token_data.rt:
                 try:
                     debug_logger.log_info(f"[AUTO_REFRESH] 📝 Token {token_id}: 尝试使用 RT 刷新...")
-                    result = await self.rt_to_at(token_data.rt, client_id=token_data.client_id)
+                    result = await self.rt_to_at(token_data.rt, client_id=token_data.client_id, worker_url=worker_url)
                     new_at = result.get("access_token")
                     new_rt = result.get("refresh_token", token_data.rt)  # RT might be updated
                     refresh_method = "RT"
@@ -1264,3 +1329,90 @@ class TokenManager:
         except Exception as e:
             debug_logger.log_info(f"[AUTO_REFRESH] 🔴 Token {token_id}: 自动刷新异常 - {str(e)}")
             return False
+
+    async def start_auto_refresh_task(self):
+        """Start the daily auto-refresh background task"""
+        if self._refresh_task is None:
+            self._stop_refresh_event.clear()
+            self._refresh_task = asyncio.create_task(self._daily_refresh_loop())
+            print("🕒 Auto-refresh background task started")
+
+    async def stop_auto_refresh_task(self):
+        """Stop the auto-refresh background task"""
+        if self._refresh_task:
+            self._stop_refresh_event.set()
+            # Cancel the task to interrupt sleep
+            self._refresh_task.cancel()
+            try:
+                await self._refresh_task
+            except asyncio.CancelledError:
+                pass
+            self._refresh_task = None
+            print("🛑 Auto-refresh background task stopped")
+
+    async def _daily_refresh_loop(self):
+        """Loop that runs daily at 12:00 to refresh tokens"""
+        while not self._stop_refresh_event.is_set():
+            try:
+                # Calculate time until next 12:00:00
+                now = datetime.now()
+                target_time = now.replace(hour=12, minute=0, second=0, microsecond=0)
+                
+                # If 12:00 has already passed today, schedule for tomorrow
+                if now >= target_time:
+                    target_time += timedelta(days=1)
+                
+                sleep_seconds = (target_time - now).total_seconds()
+                debug_logger.log_info(f"[SCHEDULER] Next auto-refresh scheduled at {target_time} (in {sleep_seconds/3600:.2f} hours)")
+                
+                # Sleep until target time (check for stop event every minute for cleaner shutdown or just wait)
+                # Simple await sleep is fine as we cancel task on stop
+                await asyncio.sleep(sleep_seconds)
+                
+                if self._stop_refresh_event.is_set():
+                    break
+
+                # Run refresh check
+                await self.run_refresh_check()
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                debug_logger.log_info(f"[SCHEDULER] Error in refresh loop: {e}")
+                await asyncio.sleep(60)  # Retry after 1 minute if component failure
+
+    async def run_refresh_check(self):
+        """Run the refresh check immediately"""
+        if not config.at_auto_refresh_enabled:
+            debug_logger.log_info("[AUTO_REFRESH] Auto-refresh is disabled in config, skipping.")
+            return
+
+        debug_logger.log_info("[AUTO_REFRESH] 🕛 Starting daily token expiration check...")
+        
+        try:
+            tokens = await self.db.get_all_tokens()
+            refreshed_count = 0
+            
+            # Get worker URLs for rotation
+            worker_urls = config.cf_worker_urls
+            
+            for i, token in enumerate(tokens):
+                if not token.is_active:
+                    continue
+                    
+                # Worker rotation logic
+                worker_url = None
+                if worker_urls:
+                    worker_index = (i // 10) % len(worker_urls) # Rotate every 10 tokens for background task
+                    worker_url = worker_urls[worker_index]
+
+                try:
+                    success = await self.auto_refresh_expiring_token(token.id, worker_url=worker_url)
+                    if success:
+                        refreshed_count += 1
+                except Exception as e:
+                    print(f"Error refreshing token {token.id}: {e}")
+            
+            debug_logger.log_info(f"[AUTO_REFRESH] Daily check completed. Refreshed {refreshed_count} tokens.")
+        except Exception as e:
+            debug_logger.log_info(f"[AUTO_REFRESH] Failed to run daily check: {e}")

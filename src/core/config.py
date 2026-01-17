@@ -208,5 +208,62 @@ class Config:
             self._config["token_refresh"] = {}
         self._config["token_refresh"]["at_auto_refresh_enabled"] = enabled
 
+    # Cloudflare Worker properties
+    @property
+    def cf_worker_enabled(self) -> bool:
+        """Get Cloudflare Worker proxy enabled status"""
+        return self._config.get("cloudflare_worker", {}).get("enabled", False)
+
+    def set_cf_worker_enabled(self, enabled: bool):
+        """Set Cloudflare Worker proxy enabled/disabled"""
+        if "cloudflare_worker" not in self._config:
+            self._config["cloudflare_worker"] = {}
+        self._config["cloudflare_worker"]["enabled"] = enabled
+
+    @property
+    def cf_worker_urls(self) -> list:
+        """Get list of Cloudflare Worker URLs"""
+        urls_str = self._config.get("cloudflare_worker", {}).get("worker_urls", "")
+        if not urls_str:
+            # Fallback to old single worker_url for backwards compatibility
+            single_url = self._config.get("cloudflare_worker", {}).get("worker_url", "")
+            return [single_url] if single_url else []
+        # Split by comma and strip whitespace
+        return [url.strip() for url in urls_str.split(",") if url.strip()]
+
+    def set_cf_worker_urls(self, urls: list):
+        """Set Cloudflare Worker URLs"""
+        if "cloudflare_worker" not in self._config:
+            self._config["cloudflare_worker"] = {}
+        self._config["cloudflare_worker"]["worker_urls"] = ",".join(urls)
+
+    @property
+    def cf_worker_token(self) -> str:
+        """Get Cloudflare Worker authentication token"""
+        return self._config.get("cloudflare_worker", {}).get("worker_token", "")
+
+    def set_cf_worker_token(self, token: str):
+        """Set Cloudflare Worker authentication token"""
+        if "cloudflare_worker" not in self._config:
+            self._config["cloudflare_worker"] = {}
+        self._config["cloudflare_worker"]["worker_token"] = token
+
+    # Rate limit properties
+    @property
+    def rate_limit_enabled(self) -> bool:
+        """Get rate limit enabled status"""
+        return self._config.get("rate_limit", {}).get("enabled", True)
+
+    @property
+    def rate_limit_interval(self) -> float:
+        """Get rate limit request interval in seconds"""
+        return self._config.get("rate_limit", {}).get("request_interval", 1.5)
+
+    def set_rate_limit_interval(self, interval: float):
+        """Set rate limit request interval"""
+        if "rate_limit" not in self._config:
+            self._config["rate_limit"] = {}
+        self._config["rate_limit"]["request_interval"] = interval
+
 # Global config instance
 config = Config()

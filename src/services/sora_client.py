@@ -51,12 +51,51 @@ class SoraClient:
     """Sora API client with proxy support"""
 
     CHATGPT_BASE_URL = "https://chatgpt.com"
+    SORA_DIRECT_URL = "https://sora.chatgpt.com/backend"
     SENTINEL_FLOW = "sora_2_create_task"
+    
+    # Class-level counter for round-robin Worker selection
+    _worker_index = 0
 
     def __init__(self, proxy_manager: ProxyManager):
         self.proxy_manager = proxy_manager
-        self.base_url = config.sora_base_url
         self.timeout = config.sora_timeout
+        self._last_request_time = 0.0  # For rate limiting
+    
+    def _get_next_worker_url(self) -> str:
+        """Get next Worker URL using round-robin selection"""
+        worker_urls = config.cf_worker_urls
+        if not worker_urls:
+            return ""
+        
+        # Round-robin selection
+        url = worker_urls[SoraClient._worker_index % len(worker_urls)]
+        SoraClient._worker_index += 1
+        
+        # Remove trailing slash
+        return url.rstrip('/')
+        
+    @property
+    def base_url(self) -> str:
+        """Get base URL - uses Worker if enabled, otherwise direct URL"""
+        if config.cf_worker_enabled:
+            worker_url = self._get_next_worker_url()
+            if worker_url:
+                debug_logger.log_info(f"Using Worker: {worker_url}")
+                # Use /_p prefix for proxy routing (matches Worker path handling)
+                return f"{worker_url}/_p/backend"
+        return self.SORA_DIRECT_URL
+    
+    async def _apply_rate_limit(self):
+        """Apply rate limiting delay between requests"""
+        if config.rate_limit_enabled:
+            elapsed = time.time() - self._last_request_time
+            interval = config.rate_limit_interval
+            if elapsed < interval:
+                wait_time = interval - elapsed
+                debug_logger.log_info(f"Rate limiting: waiting {wait_time:.2f}s before next request")
+                await asyncio.sleep(wait_time)
+        self._last_request_time = time.time()
 
     @staticmethod
     def _get_pow_parse_time() -> str:
@@ -173,7 +212,7 @@ class SoraClient:
     async def _generate_sentinel_token(self, token: Optional[str] = None, proxy_url: Optional[str] = None) -> str:
         """Generate openai-sentinel-token by calling /backend-api/sentinel/req and solving PoW"""
         req_id = str(uuid4())
-        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         
         # Await the async PoW token generation
         pow_token = await self._get_pow_token(user_agent)
@@ -196,7 +235,7 @@ class SoraClient:
                 "headers": headers,
                 "json": payload,
                 "timeout": 10,
-                "impersonate": "safari_ios"
+                "impersonate": "chrome120"
             }
             if proxy_url:
                 kwargs["proxy"] = proxy_url
@@ -297,26 +336,42 @@ class SoraClient:
             add_sentinel_token: Whether to add openai-sentinel-token header (only for generation requests)
             token_id: Token ID for getting token-specific proxy (optional)
         """
+        # Apply rate limiting before making request
+        await self._apply_rate_limit()
+        
         proxy_url = await self.proxy_manager.get_proxy_url(token_id)
 
-        # 过滤代理：只允许创建视频(create)的流量经过代理
-        # 允许的 endpoint 前缀
-        allowed_prefixes = ["/nf/create", "/video_gen"]
-        
-        should_use_proxy = False
-        if proxy_url:
-            for prefix in allowed_prefixes:
-                if endpoint.startswith(prefix):
-                    should_use_proxy = True
-                    break
-        
-        if not should_use_proxy:
-            proxy_url = None
+        # 过滤代理逻辑已移除：允许所有请求使用代理
+        # if proxy_url:
+        #     for prefix in allowed_prefixes:
+        #         if endpoint.startswith(prefix):
+        #             should_use_proxy = True
+        #             break
+        # 
+        # if not should_use_proxy:
+        #     proxy_url = None
 
+        # Browser headers to match Chrome 120
         headers = {
             "Authorization": f"Bearer {token}",
-            "User-Agent" : "Sora/1.2026.007 (Android 15; 24122RKC7C; build 2600700)"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Origin": "https://sora.chatgpt.com",
+            "Referer": "https://sora.chatgpt.com/",
+            "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-site",
+            "Priority": "u=1, i"
         }
+        
+        # Add Worker authentication token if using Worker
+        if config.cf_worker_enabled and config.cf_worker_token:
+            headers["X-Proxy-Token"] = config.cf_worker_token
 
         # 只在生成请求时添加 sentinel token
         if add_sentinel_token:
@@ -331,7 +386,7 @@ class SoraClient:
             kwargs = {
                 "headers": headers,
                 "timeout": self.timeout,
-                "impersonate": "safari_ios"  # 自动生成 User-Agent 和浏览器指纹
+                "impersonate": "chrome120"  # Match the User-Agent
             }
 
             if proxy_url:
@@ -353,68 +408,134 @@ class SoraClient:
                 proxy=proxy_url
             )
 
-            # Record start time
-            start_time = time.time()
+            # Retry logic
+            max_retries = 3
+            retry_delay = 1
+            
+            for attempt in range(max_retries + 1):
+                # Record start time
+                start_time = time.time()
 
-            # Make request
-            if method == "GET":
-                response = await session.get(url, **kwargs)
-            elif method == "POST":
-                response = await session.post(url, **kwargs)
-            else:
-                raise ValueError(f"Unsupported method: {method}")
-
-            # Calculate duration
-            duration_ms = (time.time() - start_time) * 1000
-
-            # Parse response
-            try:
-                response_json = response.json()
-            except:
-                response_json = None
-
-            # Log response
-            debug_logger.log_response(
-                status_code=response.status_code,
-                headers=dict(response.headers),
-                body=response_json if response_json else response.text,
-                duration_ms=duration_ms
-            )
-
-            # Check status
-            if response.status_code not in [200, 201]:
-                # Parse error response
-                error_data = None
                 try:
-                    error_data = response.json()
-                except:
-                    pass
+                    # Make request
+                    if method == "GET":
+                        response = await session.get(url, **kwargs)
+                    elif method == "POST":
+                        response = await session.post(url, **kwargs)
+                    elif method == "DELETE":
+                        response = await session.delete(url, **kwargs)
+                    else:
+                        raise ValueError(f"Unsupported method: {method}")
 
-                # Check for unsupported_country_code error
-                if error_data and isinstance(error_data, dict):
-                    error_info = error_data.get("error", {})
-                    if error_info.get("code") == "unsupported_country_code":
-                        # Create structured error with full error data
-                        import json
-                        error_msg = json.dumps(error_data)
-                        debug_logger.log_error(
-                            error_message=f"Unsupported country: {error_msg}",
-                            status_code=response.status_code,
-                            response_text=error_msg
-                        )
-                        # Raise exception with structured error data
-                        raise Exception(error_msg)
+                    # Calculate duration
+                    duration_ms = (time.time() - start_time) * 1000
 
-                # Generic error handling
-                error_msg = f"API request failed: {response.status_code} - {response.text}"
-                debug_logger.log_error(
-                    error_message=error_msg,
-                    status_code=response.status_code,
-                    response_text=response.text
-                )
-                raise Exception(error_msg)
+                    # Parse response when possible for logging
+                    try:
+                        response_json = response.json()
+                    except:
+                        response_json = None
 
-            return response_json if response_json else response.json()
+                    # Log response
+                    debug_logger.log_response(
+                        status_code=response.status_code,
+                        headers=dict(response.headers),
+                        body=response_json if response_json else response.text,
+                        duration_ms=duration_ms
+                    )
+
+                    # Success check
+                    if response.status_code in [200, 201, 204]:
+                        result = response_json if response_json else response.json() if response.text else {}
+                        
+                        # Check for Worker decoy response (authentication failure)
+                        if isinstance(result, dict) and result.get("title") == "Welcome" and result.get("status") == "Service Available":
+                            error_msg = "Cloudflare Worker authentication failed. Please check that worker_token in setting.toml matches WORKER_TOKEN environment variable in your Worker."
+                            debug_logger.log_error(
+                                error_message=error_msg,
+                                status_code=401,
+                                response_text=str(result)
+                            )
+                            raise Exception(error_msg)
+                        
+                        return result
+
+                    # Handle 429 (Too Many Requests) / Cloudflare
+                    if response.status_code == 429:
+                        if attempt < max_retries:
+                            wait_time = retry_delay * (2 ** attempt) + random.uniform(0.1, 1.0)
+                            
+                            # If response contains CF challenge text, wait longer
+                            if "<html" in response.text and "challenge" in response.text:
+                                debug_logger.log_warning(f"Cloudflare challenge detected. Waiting {wait_time + 2}s before retry.")
+                                await asyncio.sleep(wait_time + 2)
+                            else:
+                                debug_logger.log_warning(f"429 received. Waiting {wait_time}s before retry.")
+                                await asyncio.sleep(wait_time)
+                            continue
+                    
+                    # Handle 502/503/504 (Server Errors) - sometimes momentary
+                    if response.status_code in [502, 503, 504]:
+                         if attempt < max_retries:
+                            wait_time = 1.0 + random.uniform(0.1, 0.5)
+                            debug_logger.log_warning(f"Server error {response.status_code}. Waiting {wait_time}s before retry.")
+                            await asyncio.sleep(wait_time)
+                            continue
+
+                    # Handle 400 'heavy_load' error
+                    if response.status_code == 400:
+                        try:
+                            error_data = response.json()
+                            if isinstance(error_data, dict) and error_data.get("error", {}).get("code") == "heavy_load":
+                                if attempt < max_retries:
+                                    # Heavy load needs longer wait time
+                                    wait_time = retry_delay * (2 ** attempt) + random.uniform(2.0, 5.0)  
+                                    debug_logger.log_warning(f"Upstream heavy load detected. Waiting {wait_time:.2f}s before retry.")
+                                    await asyncio.sleep(wait_time)
+                                    continue
+                        except:
+                            pass
+
+                    # Parse error response for specific API errors
+                    error_data = None
+                    try:
+                        error_data = response.json()
+                    except:
+                        pass
+
+                    # Check for unsupported_country_code error
+                    if error_data and isinstance(error_data, dict):
+                        error_info = error_data.get("error", {})
+                        if error_info.get("code") == "unsupported_country_code":
+                            import json
+                            error_msg = json.dumps(error_data)
+                            debug_logger.log_error(
+                                error_message=f"Unsupported country: {error_msg}",
+                                status_code=response.status_code,
+                                response_text=error_msg
+                            )
+                            raise Exception(error_msg)
+
+                    # Generic error handling calls for the loop to end by raising exception
+                    error_msg = f"API request failed: {response.status_code} - {response.text}"
+                    debug_logger.log_error(
+                        error_message=error_msg,
+                        status_code=response.status_code,
+                        response_text=response.text
+                    )
+                    raise Exception(error_msg)
+
+                except Exception as e:
+                    # If it's a connection error or timeout, we might want to retry
+                    if attempt < max_retries and ("timeout" in str(e).lower() or "connection" in str(e).lower()):
+                         wait_time = 2.0
+                         debug_logger.log_warning(f"Request error: {str(e)}. Retrying in {wait_time}s...")
+                         await asyncio.sleep(wait_time)
+                         continue
+                    raise e
+                    
+            # Should not reach here
+            return {}
     
     async def get_user_info(self, token: str) -> Dict[str, Any]:
         """Get user information"""
